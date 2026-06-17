@@ -25,7 +25,17 @@ app.add_middleware(
 COPERNICUS_USER     = os.getenv("COPERNICUS_USER", "")
 COPERNICUS_PASSWORD = os.getenv("COPERNICUS_PASSWORD", "")
 ANTHROPIC_API_KEY   = os.getenv("ANTHROPIC_API_KEY", "")
-
+# ── Prompts de texto ──
+IA_PROMPTS = {
+    "pesquero": "Analizá datos del Mar Argentino zona TdF: temp 7.3°C (+2.1°C sobre media), clorofila 2.8 mg/m³, 47 embarcaciones (3 en zona restringida), bloom fitoplancton activo. Informe ejecutivo de 5 oraciones sobre situación pesquera y economía azul.",
+    "termico": "Evaluá anomalía térmica en Mar Argentino zona TdF: +2.1°C sobre media histórica. ¿Qué implica para el ecosistema marino y la pesca? 5 oraciones.",
+    "productividad": "Analizá productividad marina Mar Argentino TdF: clorofila-a 2.8 mg/m³ (bloom activo), temperatura 7.3°C. ¿Oportunidades y riesgos para la economía azul argentina? 5 oraciones.",
+    "economia": "¿Impacto económico de las condiciones actuales del Mar Argentino (TdF) en la industria pesquera? Temp +2.1°C, clorofila alta, 47 embarcaciones activas. 5 oraciones.",
+    "ch4riesgo": "Evaluá riesgo de metano en TdF: CH₄ promedio 1847 ppb, pico Cuenca Austral 2340 ppb (umbral crítico 2300), variación +12% semanal, tendencia ascendente 72h. 5 oraciones.",
+    "ch4fuente": "Identificá fuentes probables de CH₄ en TdF (2340 ppb Cuenca Austral). Considerá: sector hidrocarburífero, ganadería ovina, turba/humedales. 5 oraciones.",
+    "ch4tendencia": "Proyectá tendencia CH₄ en TdF para 7 días: 2340 ppb actual, +12% semanal, ascendente 72h. ¿Umbrales de alarma? 5 oraciones.",
+    "ch4accion": "Plan de acción ante anomalía CH₄ (2340 ppb) en Cuenca Austral TdF. 4 acciones numeradas, específicas y operativas.",
+}
 # ── Modelos ──
 class AnalysisRequest(BaseModel):
     lat: float          # latitud centro
