@@ -232,6 +232,9 @@ class TextRequest(BaseModel):
 class ImageRequest(BaseModel):
     imagen_base64: str
     tipo: str
+    lugar: str = "zona no especificada"
+    fecha: str = "no especificada"
+    fuente: str = "imagen satelital"
 
 # ── ENDPOINT: análisis de texto (Mar / Metano) ──
 @app.post("/analizar-texto")
