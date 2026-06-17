@@ -215,7 +215,72 @@ async def analizar(req: AnalysisRequest):
         fecha_imagen=fecha_imagen,
     )
 
+# ── Modelos adicionales ──
+class TextRequest(BaseModel):
+    prompt_key: str
 
+class ImageRequest(BaseModel):
+    imagen_base64: str
+    tipo: str
+
+# ── ENDPOINT: análisis de texto (Mar / Metano) ──
+@app.post("/analizar-texto")
+async def analizar_texto(req: TextRequest):
+    prompt = IA_PROMPTS.get(req.prompt_key, "")
+    if not prompt:
+        raise HTTPException(400, f"Prompt '{req.prompt_key}' no encontrado.")
+    payload = {
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 800,
+        "system": "Sos el sistema de análisis satelital de Vertech TdF. Respondés en español, técnico y conciso.",
+        "messages": [{"role": "user", "content": prompt}]
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            json=payload,
+            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"}
+        )
+        if r.status_code != 200:
+            raise HTTPException(502, f"Error Claude API: {r.text}")
+    texto = r.json()["content"][0]["text"]
+    return {"texto": texto}
+
+# ── ENDPOINT: análisis de imagen ──
+@app.post("/analizar-imagen")
+async def analizar_imagen(req: ImageRequest):
+    import json as json_lib
+    prompts = {
+        "campo": "Analizás una imagen satelital de un campo. Respondé SOLO en JSON puro sin backticks: {\"indices\":[{\"label\":\"NDVI promedio\",\"value\":\"0.XX\",\"sub\":\"estado vegetal\"},{\"label\":\"Humedad suelo\",\"value\":\"XX%\",\"sub\":\"condición hídrica\"},{\"label\":\"Cobertura vegetal\",\"value\":\"XX%\",\"sub\":\"densidad\"},{\"label\":\"Zonas críticas\",\"value\":\"X\",\"sub\":\"requieren acción\"}],\"diagnostico\":\"5-6 oraciones técnicas sobre el campo.\",\"misiones\":[{\"tarea\":\"descripción\",\"prioridad\":\"alta\",\"zona\":\"zona\"},{\"tarea\":\"descripción\",\"prioridad\":\"media\",\"zona\":\"zona\"},{\"tarea\":\"descripción\",\"prioridad\":\"baja\",\"zona\":\"zona\"}]}",
+        "mar": "Analizás una imagen satelital del mar. Respondé SOLO en JSON puro sin backticks: {\"indices\":[{\"label\":\"Temperatura sup.\",\"value\":\"X.X°C\",\"sub\":\"vs media\"},{\"label\":\"Clorofila-a\",\"value\":\"X.X mg/m³\",\"sub\":\"productividad\"},{\"label\":\"Turbidez\",\"value\":\"XX NTU\",\"sub\":\"claridad\"},{\"label\":\"Alertas\",\"value\":\"X\",\"sub\":\"zonas riesgo\"}],\"diagnostico\":\"5-6 oraciones sobre el estado del mar.\",\"misiones\":[{\"tarea\":\"descripción\",\"prioridad\":\"alta\",\"zona\":\"sector\"},{\"tarea\":\"descripción\",\"prioridad\":\"media\",\"zona\":\"sector\"},{\"tarea\":\"descripción\",\"prioridad\":\"baja\",\"zona\":\"sector\"}]}",
+        "metano": "Analizás una imagen satelital de CH₄. Respondé SOLO en JSON puro sin backticks: {\"indices\":[{\"label\":\"CH₄ promedio\",\"value\":\"XXXX ppb\",\"sub\":\"zona general\"},{\"label\":\"Pico detectado\",\"value\":\"XXXX ppb\",\"sub\":\"zona crítica\"},{\"label\":\"Anomalías\",\"value\":\"X zonas\",\"sub\":\"sobre umbral\"},{\"label\":\"Variación\",\"value\":\"+X%\",\"sub\":\"tendencia\"}],\"diagnostico\":\"5-6 oraciones sobre emisiones.\",\"misiones\":[{\"tarea\":\"descripción\",\"prioridad\":\"alta\",\"zona\":\"zona\"},{\"tarea\":\"descripción\",\"prioridad\":\"media\",\"zona\":\"zona\"},{\"tarea\":\"descripción\",\"prioridad\":\"baja\",\"zona\":\"zona\"}]}"
+    }
+    prompt = prompts.get(req.tipo, prompts["campo"])
+    payload = {
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 1000,
+        "system": "Sos el sistema de análisis satelital Vertech TdF. Respondés SIEMPRE en JSON puro sin texto adicional ni backticks.",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": req.imagen_base64}},
+                {"type": "text", "text": prompt}
+            ]
+        }]
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            json=payload,
+            headers={"Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"}
+        )
+        if r.status_code != 200:
+            raise HTTPException(502, f"Error Claude API: {r.text}")
+    texto = r.json()["content"][0]["text"]
+    try:
+        return json_lib.loads(texto.replace("```json","").replace("```","").strip())
+    except Exception:
+        raise HTTPException(502, "Error al parsear respuesta de IA.")
 # ── Health check ──
 @app.get("/")
 def root():
