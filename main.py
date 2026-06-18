@@ -49,7 +49,7 @@ IA_PROMPTS = {
 
 # ── Llamada a Claude ──
 async def llamar_claude(messages: list, system: str, max_tokens: int = 1200) -> str:
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(
             "https://api.anthropic.com/v1/messages",
             json={
