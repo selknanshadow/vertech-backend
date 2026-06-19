@@ -5,7 +5,7 @@ import httpx
 import os
 import json
 
-app = FastAPI(title="Vertech TdF API", version="2.1.0")
+app = FastAPI(title="Vertech TdF API", version="3.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,45 +16,107 @@ app.add_middleware(
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-class TextRequest(BaseModel):
-    prompt_key: str
-    contexto: str = ""
-
 class ImageRequest(BaseModel):
     imagen_base64: str
-    media_type: str = "image/jpeg"   # ← ahora viene del frontend
-    tipo: str = "mar"
-    lugar: str = "zona no especificada"
-    fecha: str = "no especificada"
+    media_type: str = "image/jpeg"
+    tipo: str = "campo"
+    lugar: str = ""
     fuente: str = "imagen satelital"
-    prompt_custom: str = ""
 
-IA_PROMPTS = {
-    "pesquero":    "Analizá las condiciones oceánicas y generá un informe de 5 oraciones sobre la situación pesquera en español.",
-    "termico":     "Evaluá el estado térmico marino en 5 oraciones en español.",
-    "productividad":"Analizá la productividad marina en 5 oraciones en español.",
-    "economia":    "Estimá el impacto económico oceanográfico en 5 oraciones en español.",
-    "ch4riesgo":   "Evaluá el riesgo de emisiones CH₄ en 5 oraciones en español.",
-    "ch4fuente":   "Identificá fuentes probables de CH₄ en 5 oraciones en español.",
-    "ch4tendencia":"Analizá la tendencia de CH₄ en 5 oraciones en español.",
-    "ch4accion":   "Generá 4 acciones ante emisiones CH₄ en español.",
-}
+PROMPTS = {
 
-PROMPTS_IMAGEN = {
-    "campo": """Sos un experto en teledetección agrícola de Patagonia austral.
-Analizá esta imagen satelital de {lugar} ({fuente}, {fecha}).
-Respondé SOLO con JSON puro sin backticks:
-{{"indices":"NDVI estimado: X\\nCobertura vegetal: X%\\nHumedad estimada: X%\\nZonas críticas: X","diagnostico":"5-6 oraciones técnicas sobre estado del campo, estrés hídrico, distribución de cobertura y riesgos.","misiones":"[ALTA] Zona X — tarea específica\\n[MEDIA] Zona Y — tarea\\n[BAJA] Zona Z — tarea"}}""",
+"campo": """Sos un experto en teledetección agrícola, análisis de vegetación y monitoreo de cultivos satelital.
+Analizá esta imagen satelital{lugar_str} con máximo detalle agronómico y respondé ÚNICAMENTE con JSON puro sin backticks:
+{{
+  "zona": "nombre del área o región detectada visualmente{lugar_default}",
+  "metricas": [
+    {{"label": "NDVI promedio", "value": "0.XX", "sub": "salud vegetal general", "color": "green"}},
+    {{"label": "Cobertura vegetal", "value": "XX%", "sub": "% superficie con vegetación", "color": "green"}},
+    {{"label": "Estrés hídrico", "value": "Alto/Medio/Bajo", "sub": "déficit de agua estimado", "color": "amber"}},
+    {{"label": "Sequía detectada", "value": "Sí/No/Parcial", "sub": "indicador de aridez", "color": "red"}},
+    {{"label": "Superficie cultivo", "value": "~X.XXX ha", "sub": "área cultivada estimada", "color": "blue"}},
+    {{"label": "Estado general", "value": "Óptimo/Regular/Crítico", "sub": "clasificación IA", "color": "green"}}
+  ],
+  "zonas_ndvi": [
+    {{"zona": "Zona con mayor NDVI", "ndvi": "0.XX", "estado": "Óptimo/Saludable/Estrés/Crítico", "pct": 80}},
+    {{"zona": "Zona con NDVI medio", "ndvi": "0.XX", "estado": "Óptimo/Saludable/Estrés/Crítico", "pct": 55}},
+    {{"zona": "Zona con menor NDVI", "ndvi": "0.XX", "estado": "Óptimo/Saludable/Estrés/Crítico", "pct": 30}},
+    {{"zona": "Área sin vegetación/barbecho", "ndvi": "0.XX", "estado": "Sin cobertura/Suelo desnudo", "pct": 10}}
+  ],
+  "alertas": [
+    {{"tipo": "critical/warn/ok", "titulo": "Alerta de sequía / estrés hídrico / plagas / helada / inundación", "desc": "descripción concreta de lo detectado"}},
+    {{"tipo": "critical/warn/ok", "titulo": "Estado de cultivos o zonas degradadas", "desc": "descripción concreta"}},
+    {{"tipo": "warn/ok", "titulo": "Recomendación de riego o intervención", "desc": "acción sugerida basada en la imagen"}}
+  ],
+  "diagnostico": "4-5 oraciones técnicas sobre: estado general del campo, presencia o ausencia de sequía, nivel de estrés hídrico detectado, dimensión aproximada de los cultivos, zonas que requieren intervención urgente y tendencia general del área analizada.",
+  "misiones": [
+    {{"prioridad": "ALTA", "zona": "zona específica detectada", "tarea": "acción urgente de campo o monitoreo"}},
+    {{"prioridad": "MEDIA", "zona": "zona específica detectada", "tarea": "acción de seguimiento o riego"}},
+    {{"prioridad": "BAJA", "zona": "zona específica detectada", "tarea": "monitoreo preventivo"}}
+  ]
+}}""",
 
-    "mar": """Sos un experto en oceanografía del Mar Argentino y Canal Beagle.
-Analizá esta imagen satelital de {lugar} ({fuente}, {fecha}).
-Respondé SOLO con JSON puro sin backticks:
-{{"indices":"Temperatura superficial: X°C\\nProductividad marina: X\\nTurbidez: X NTU\\nEmbarcaciones detectadas: X","diagnostico":"5-6 oraciones técnicas sobre estado oceanográfico, productividad biológica y condiciones para pesca.","misiones":"[ALTA] Zona X — acción\\n[MEDIA] Zona Y — acción\\n[BAJA] Zona Z — acción"}}""",
+"mar": """Sos un experto en oceanografía, vigilancia marítima y economía azul con experiencia en detección de pesca ilegal e identificación de embarcaciones satelital.
+Analizá esta imagen satelital marina{lugar_str} con máximo detalle y respondé ÚNICAMENTE con JSON puro sin backticks:
+{{
+  "zona": "nombre del cuerpo de agua o región marina detectada{lugar_default}",
+  "metricas": [
+    {{"label": "Embarcaciones totales", "value": "X", "sub": "detectadas en imagen", "color": "blue"}},
+    {{"label": "Pesca ilegal sospechosa", "value": "X embarcaciones", "sub": "sin AIS o en zona restringida", "color": "red"}},
+    {{"label": "Estado de mareas", "value": "Alta/Baja/Media", "sub": "estimación por patrón costero", "color": "blue"}},
+    {{"label": "Temperatura sup. mar", "value": "X.X°C", "sub": "SST estimada visualmente", "color": "blue"}},
+    {{"label": "Productividad marina", "value": "Alta/Media/Baja", "sub": "biomasa fitoplanctónica", "color": "green"}},
+    {{"label": "Nivel de alerta", "value": "Verde/Amarillo/Rojo", "sub": "estado de vigilancia", "color": "amber"}}
+  ],
+  "zonas_ndvi": [
+    {{"zona": "Zona de mayor actividad pesquera", "ndvi": "X embarcaciones", "estado": "Activa/Sospechosa/Normal", "pct": 85}},
+    {{"zona": "Área de mareas altas", "ndvi": "Nivel X m", "estado": "Alta/Media/Baja", "pct": 65}},
+    {{"zona": "Zona de productividad biológica", "ndvi": "Alta/Media", "estado": "Productiva/Normal/Baja", "pct": 50}},
+    {{"zona": "Área costera / Puerto", "ndvi": "X embarcaciones", "estado": "Activo/Inactivo", "pct": 30}}
+  ],
+  "alertas": [
+    {{"tipo": "critical/warn/ok", "titulo": "Pesca ilegal detectada / Embarcación sin transpondedor", "desc": "descripción concreta de la embarcación o zona sospechosa"}},
+    {{"tipo": "critical/warn/ok", "titulo": "Condición de marea / corriente extrema", "desc": "descripción del estado de las mareas o corrientes detectadas"}},
+    {{"tipo": "warn/ok", "titulo": "Estado general de la flota pesquera", "desc": "descripción de la actividad pesquera observada"}}
+  ],
+  "diagnostico": "4-5 oraciones técnicas sobre: cantidad y tipo de embarcaciones detectadas, presencia de actividad pesquera ilegal o sospechosa (embarcaciones en zonas restringidas, sin AIS identificable, o patrones anómalos), estado de las mareas, condiciones oceanográficas generales y nivel de alerta recomendado para las autoridades marítimas.",
+  "misiones": [
+    {{"prioridad": "ALTA", "zona": "zona sospechosa específica", "tarea": "intercepción o verificación de embarcación sospechosa"}},
+    {{"prioridad": "MEDIA", "zona": "área de monitoreo", "tarea": "patrullaje o seguimiento de flota"}},
+    {{"prioridad": "BAJA", "zona": "zona costera", "tarea": "monitoreo preventivo de mareas y accesos"}}
+  ]
+}}""",
 
-    "metano": """Sos un experto en monitoreo atmosférico de CH₄ en la Cuenca Austral.
-Analizá esta imagen TROPOMI de {lugar} ({fuente}, {fecha}).
-Respondé SOLO con JSON puro sin backticks:
-{{"indices":"Concentración CH₄: X ppb\\nZonas de emisión: X\\nAnomalías detectadas: X\\nNivel de riesgo: X","diagnostico":"5-6 oraciones técnicas sobre riesgo, fuentes probables, dispersión y tendencia.","misiones":"[ALTA] Zona X — acción urgente\\n[MEDIA] Zona Y — acción\\n[BAJA] Zona Z — acción"}}"""
+"metano": """Sos un experto en monitoreo atmosférico de gases de efecto invernadero, especializado en detección de fugas de metano (CH₄) y generación de alertas ambientales.
+Analizá esta imagen TROPOMI/satelital de CH₄{lugar_str} con máximo detalle y respondé ÚNICAMENTE con JSON puro sin backticks:
+{{
+  "zona": "nombre del área o región con emisiones detectadas{lugar_default}",
+  "metricas": [
+    {{"label": "CH₄ promedio", "value": "X.XXX ppb", "sub": "concentración columna total", "color": "red"}},
+    {{"label": "Pico de emisión", "value": "X.XXX ppb", "sub": "valor máximo detectado", "color": "red"}},
+    {{"label": "Fugas detectadas", "value": "X focos", "sub": "puntos de emisión identificados", "color": "red"}},
+    {{"label": "Anomalía sobre base", "value": "+X ppb", "sub": "desviación sobre línea base global (~1900 ppb)", "color": "amber"}},
+    {{"label": "Área afectada", "value": "~X.XXX km²", "sub": "superficie con emisiones elevadas", "color": "amber"}},
+    {{"label": "Nivel de alerta", "value": "CRÍTICO/ALTO/MEDIO/BAJO", "sub": "clasificación de riesgo IA", "color": "red"}}
+  ],
+  "zonas_ndvi": [
+    {{"zona": "Foco principal de fuga", "ndvi": "X.XXX ppb", "estado": "FUGA ACTIVA / Crítico", "pct": 95}},
+    {{"zona": "Pluma de dispersión", "ndvi": "X.XXX ppb", "estado": "Elevado / En dispersión", "pct": 70}},
+    {{"zona": "Área secundaria afectada", "ndvi": "X.XXX ppb", "estado": "Moderado / En monitoreo", "pct": 45}},
+    {{"zona": "Zona de línea base", "ndvi": "~1.900 ppb", "estado": "Normal / Sin anomalía", "pct": 15}}
+  ],
+  "alertas": [
+    {{"tipo": "critical", "titulo": "FUGA DE METANO ACTIVA detectada", "desc": "descripción de la fuga: ubicación estimada, intensidad y posible fuente (gasoducto, pozo, relleno sanitario, ganadería, humedal)"}},
+    {{"tipo": "critical/warn", "titulo": "Pluma de dispersión identificada", "desc": "dirección y extensión de la pluma, vientos estimados y zonas en riesgo de exposición"}},
+    {{"tipo": "warn/ok", "titulo": "Fuentes probables de emisión", "desc": "identificación de posibles fuentes: industria energética, agricultura, ganadería, descomposición orgánica"}}
+  ],
+  "diagnostico": "4-5 oraciones técnicas sobre: nivel de concentración de CH₄ detectado y comparación con línea base global, identificación de focos activos de fuga y sus posibles fuentes (sector energético, ganadería, humedales, industria), extensión y dirección de la pluma de dispersión, nivel de riesgo ambiental y para la salud, y acciones urgentes recomendadas para organismos ambientales y operadores de infraestructura.",
+  "misiones": [
+    {{"prioridad": "ALTA", "zona": "foco de fuga detectado", "tarea": "inspección urgente in-situ y cierre de válvulas / aislamiento del área"}},
+    {{"prioridad": "ALTA", "zona": "pluma de dispersión", "tarea": "alerta a poblaciones cercanas y autoridades ambientales"}},
+    {{"prioridad": "MEDIA", "zona": "área secundaria", "tarea": "muestreo atmosférico y validación con sensores terrestres"}}
+  ]
+}}"""
 }
 
 def get_headers():
@@ -64,69 +126,30 @@ def get_headers():
         "anthropic-version": "2023-06-01"
     }
 
-@app.post("/analizar-texto")
-async def analizar_texto(req: TextRequest):
-    prompt = IA_PROMPTS.get(req.prompt_key, "")
-    if not prompt:
-        raise HTTPException(400, f"Prompt no encontrado: {req.prompt_key}")
-    if req.contexto:
-        prompt = f"Contexto: {req.contexto}\n\n{prompt}"
-
-    async with httpx.AsyncClient(timeout=90) as client:
-        r = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 800,
-                "system": "Sos el sistema de análisis satelital Vertech TdF. Respondés en español.",
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            headers=get_headers()
-        )
-    if r.status_code != 200:
-        raise HTTPException(502, f"Error Claude: {r.text}")
-    return {"texto": r.json()["content"][0]["text"]}
-
 @app.post("/analizar-imagen")
 async def analizar_imagen(req: ImageRequest):
-    # Determinar media_type válido
     media_type = req.media_type
     if media_type not in ["image/jpeg", "image/png", "image/gif", "image/webp"]:
-        media_type = "image/jpeg"  # fallback seguro
+        media_type = "image/jpeg"
 
-    # Construir prompt
-    if req.prompt_custom:
-        prompt_texto = req.prompt_custom
-    else:
-        template = PROMPTS_IMAGEN.get(req.tipo, PROMPTS_IMAGEN["mar"])
-        prompt_texto = template.format(
-            lugar=req.lugar,
-            fuente=req.fuente,
-            fecha=req.fecha
-        )
+    lugar_str     = f" de {req.lugar}" if req.lugar else ""
+    lugar_default = f", o '{req.lugar}' si no se puede determinar visualmente" if req.lugar else ", o 'Zona no especificada' si no se puede determinar"
+
+    template     = PROMPTS.get(req.tipo, PROMPTS["campo"])
+    prompt_texto = template.format(lugar_str=lugar_str, lugar_default=lugar_default)
 
     async with httpx.AsyncClient(timeout=90) as client:
         r = await client.post(
             "https://api.anthropic.com/v1/messages",
             json={
                 "model": "claude-sonnet-4-6",
-                "max_tokens": 1200,
-                "system": "Sos el sistema de análisis satelital Vertech TdF. Respondés SIEMPRE en JSON puro sin backticks.",
+                "max_tokens": 1800,
+                "system": "Sos el sistema de análisis satelital Vertech. Analizás imágenes satelitales de cualquier parte del mundo con precisión técnica. Respondés SIEMPRE en JSON puro sin backticks ni texto adicional.",
                 "messages": [{
                     "role": "user",
                     "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": req.imagen_base64
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt_texto
-                        }
+                        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": req.imagen_base64}},
+                        {"type": "text", "text": prompt_texto}
                     ]
                 }]
             },
@@ -144,12 +167,8 @@ async def analizar_imagen(req: ImageRequest):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "app": "Vertech TdF API", "version": "2.1.0"}
+    return {"status": "ok", "app": "Vertech API", "version": "3.1.0"}
 
 @app.get("/health")
 def health():
-    key_ok = ANTHROPIC_API_KEY.startswith("sk-ant-")
-    return {
-        "status": "healthy",
-        "api_key_configured": key_ok
-    }
+    return {"status": "healthy", "api_key_configured": ANTHROPIC_API_KEY.startswith("sk-ant-")}
