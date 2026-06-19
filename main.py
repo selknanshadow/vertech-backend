@@ -161,9 +161,16 @@ async def analizar_imagen(req: ImageRequest):
 
     texto = r.json()["content"][0]["text"]
     try:
-        return json.loads(texto.replace("```json", "").replace("```", "").strip())
-    except Exception:
-        raise HTTPException(502, f"Error JSON: {texto[:300]}")
+        # Limpiar el texto antes de parsear
+        limpio = texto.replace("```json", "").replace("```", "").strip()
+        # Extraer solo el bloque JSON si hay texto extra
+        inicio = limpio.find("{")
+        fin = limpio.rfind("}") + 1
+        if inicio >= 0 and fin > inicio:
+            limpio = limpio[inicio:fin]
+        return json.loads(limpio)
+    except Exception as e:
+        raise HTTPException(502, f"Error JSON: {str(e)} | Texto: {texto[:300]}")
 
 @app.get("/")
 def root():
