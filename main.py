@@ -5,7 +5,7 @@ import httpx
 import os
 import json
 
-app = FastAPI(title="Vertech TdF API", version="3.1.0")
+app = FastAPI(title="Vertech TdF API", version="3.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,7 +26,7 @@ class ImageRequest(BaseModel):
 PROMPTS = {
 
 "campo": """Sos un experto en teledetección agrícola, análisis de vegetación y monitoreo de cultivos satelital.
-Analizá esta imagen satelital{lugar_str} con máximo detalle agronómico y respondé ÚNICAMENTE con JSON puro sin backticks:
+Analizá esta imagen satelital{lugar_str} — puede provenir de SAOCOM (SAR banda L), constelación SIASGE o Sentinel-2 — con máximo detalle agronómico y respondé ÚNICAMENTE con JSON puro sin backticks:
 {{
   "zona": "nombre del área o región detectada visualmente{lugar_default}",
   "metricas": [
@@ -56,17 +56,17 @@ Analizá esta imagen satelital{lugar_str} con máximo detalle agronómico y resp
   ]
 }}""",
 
-"mar": """Sos un experto en oceanografía, vigilancia marítima y economía azul con experiencia en detección de pesca ilegal e identificación de embarcaciones satelital.
-Analizá esta imagen satelital marina{lugar_str} con máximo detalle y respondé ÚNICAMENTE con JSON puro sin backticks:
+"mar": """Sos un experto en oceanografía, vigilancia marítima y economía azul con experiencia en detección de pesca ilegal e identificación de embarcaciones por imagen satelital.
+Analizá esta imagen satelital marina{lugar_str} — puede provenir de SAOCOM 1A/1B (SAR banda L, CONAE), SABIA-Mar (oceanografía, CONAE) o constelación SIASGE — con máximo detalle y respondé ÚNICAMENTE con JSON puro sin backticks:
 {{
   "zona": "nombre del cuerpo de agua o región marina detectada{lugar_default}",
   "metricas": [
-    {{"label": "Embarcaciones totales", "value": "X", "sub": "detectadas en imagen", "color": "blue"}},
+    {{"label": "Embarcaciones totales", "value": "X", "sub": "detectadas en imagen SAOCOM/SAR", "color": "blue"}},
     {{"label": "Pesca ilegal sospechosa", "value": "X embarcaciones", "sub": "sin AIS o en zona restringida", "color": "red"}},
     {{"label": "Estado de mareas", "value": "Alta/Baja/Media", "sub": "estimación por patrón costero", "color": "blue"}},
-    {{"label": "Temperatura sup. mar", "value": "X.X°C", "sub": "SST estimada visualmente", "color": "blue"}},
-    {{"label": "Productividad marina", "value": "Alta/Media/Baja", "sub": "biomasa fitoplanctónica", "color": "green"}},
-    {{"label": "Nivel de alerta", "value": "Verde/Amarillo/Rojo", "sub": "estado de vigilancia", "color": "amber"}}
+    {{"label": "Temperatura sup. mar", "value": "X.X°C", "sub": "SST via SABIA-Mar / sensor térmico", "color": "blue"}},
+    {{"label": "Productividad marina", "value": "Alta/Media/Baja", "sub": "clorofila-a via SABIA-Mar", "color": "green"}},
+    {{"label": "Nivel de alerta", "value": "Verde/Amarillo/Rojo", "sub": "estado de vigilancia ZEE", "color": "amber"}}
   ],
   "zonas_ndvi": [
     {{"zona": "Zona de mayor actividad pesquera", "ndvi": "X embarcaciones", "estado": "Activa/Sospechosa/Normal", "pct": 85}},
@@ -75,20 +75,20 @@ Analizá esta imagen satelital marina{lugar_str} con máximo detalle y respondé
     {{"zona": "Área costera / Puerto", "ndvi": "X embarcaciones", "estado": "Activo/Inactivo", "pct": 30}}
   ],
   "alertas": [
-    {{"tipo": "critical/warn/ok", "titulo": "Pesca ilegal detectada / Embarcación sin transpondedor", "desc": "descripción concreta de la embarcación o zona sospechosa"}},
-    {{"tipo": "critical/warn/ok", "titulo": "Condición de marea / corriente extrema", "desc": "descripción del estado de las mareas o corrientes detectadas"}},
-    {{"tipo": "warn/ok", "titulo": "Estado general de la flota pesquera", "desc": "descripción de la actividad pesquera observada"}}
+    {{"tipo": "critical/warn/ok", "titulo": "Pesca ilegal detectada / Embarcación sin transpondedor AIS", "desc": "descripción concreta de la embarcación o zona sospechosa detectada por SAOCOM"}},
+    {{"tipo": "critical/warn/ok", "titulo": "Condición de marea / corriente extrema", "desc": "descripción del estado de mareas o corrientes detectadas"}},
+    {{"tipo": "warn/ok", "titulo": "Estado general de la flota pesquera", "desc": "descripción de la actividad pesquera observada en la ZEE argentina"}}
   ],
-  "diagnostico": "4-5 oraciones técnicas sobre: cantidad y tipo de embarcaciones detectadas, presencia de actividad pesquera ilegal o sospechosa (embarcaciones en zonas restringidas, sin AIS identificable, o patrones anómalos), estado de las mareas, condiciones oceanográficas generales y nivel de alerta recomendado para las autoridades marítimas.",
+  "diagnostico": "4-5 oraciones técnicas sobre: cantidad y tipo de embarcaciones detectadas via SAOCOM SAR, presencia de actividad pesquera ilegal o sospechosa en la ZEE argentina (embarcaciones sin AIS, en zonas restringidas o con patrones anómalos), estado de las mareas, condiciones oceanográficas (temperatura y clorofila via SABIA-Mar) y nivel de alerta recomendado para la Prefectura Naval y CONAE.",
   "misiones": [
-    {{"prioridad": "ALTA", "zona": "zona sospechosa específica", "tarea": "intercepción o verificación de embarcación sospechosa"}},
-    {{"prioridad": "MEDIA", "zona": "área de monitoreo", "tarea": "patrullaje o seguimiento de flota"}},
-    {{"prioridad": "BAJA", "zona": "zona costera", "tarea": "monitoreo preventivo de mareas y accesos"}}
+    {{"prioridad": "ALTA", "zona": "zona sospechosa específica", "tarea": "intercepción o verificación coordinada con Prefectura Naval"}},
+    {{"prioridad": "MEDIA", "zona": "área de monitoreo", "tarea": "patrullaje o seguimiento de flota con próxima pasada SAOCOM"}},
+    {{"prioridad": "BAJA", "zona": "zona costera", "tarea": "monitoreo preventivo de mareas y accesos portuarios"}}
   ]
 }}""",
 
 "metano": """Sos un experto en monitoreo atmosférico de gases de efecto invernadero, especializado en detección de fugas de metano (CH₄) y generación de alertas ambientales.
-Analizá esta imagen TROPOMI/satelital de CH₄{lugar_str} con máximo detalle y respondé ÚNICAMENTE con JSON puro sin backticks:
+Analizá esta imagen de columna atmosférica de CH₄{lugar_str} — puede provenir de TROPOMI/Sentinel-5P (ESA/Copernicus) o sensores equivalentes — con máximo detalle y respondé ÚNICAMENTE con JSON puro sin backticks:
 {{
   "zona": "nombre del área o región con emisiones detectadas{lugar_default}",
   "metricas": [
@@ -144,7 +144,7 @@ async def analizar_imagen(req: ImageRequest):
             json={
                 "model": "claude-sonnet-4-6",
                 "max_tokens": 1800,
-                "system": "Sos el sistema de análisis satelital Vertech. Analizás imágenes satelitales de cualquier parte del mundo con precisión técnica. Respondés SIEMPRE en JSON puro sin backticks ni texto adicional.",
+                "system": "Sos el sistema de análisis satelital Vertech TdF, desarrollado en Tierra del Fuego, Argentina. Analizás imágenes de la constelación CONAE (SAOCOM 1A/1B, SABIA-Mar, SIASGE) y datos complementarios de ESA/Copernicus. Tu especialidad es la ZEE argentina, el Mar Argentino, la Patagonia y ecosistemas subantárticos. Respondés SIEMPRE en JSON puro sin backticks ni texto adicional.",
                 "messages": [{
                     "role": "user",
                     "content": [
@@ -161,9 +161,7 @@ async def analizar_imagen(req: ImageRequest):
 
     texto = r.json()["content"][0]["text"]
     try:
-        # Limpiar el texto antes de parsear
         limpio = texto.replace("```json", "").replace("```", "").strip()
-        # Extraer solo el bloque JSON si hay texto extra
         inicio = limpio.find("{")
         fin = limpio.rfind("}") + 1
         if inicio >= 0 and fin > inicio:
@@ -174,7 +172,7 @@ async def analizar_imagen(req: ImageRequest):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "app": "Vertech API", "version": "3.1.0"}
+    return {"status": "ok", "app": "Vertech TdF API", "version": "3.2.0"}
 
 @app.get("/health")
 def health():
