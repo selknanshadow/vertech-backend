@@ -7,7 +7,7 @@ import os
 import json
 import re
 
-app = FastAPI(title="Vertech TdF API", version="4.0.0")
+app = FastAPI(title="Vertech TdF API", version="4.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -386,6 +386,266 @@ async def qa_chat(req: MapaChatRequest):
     return {"respuesta": texto.strip()}
 
 
+# ══════════════════════════════════════════════════════════
+# MÓDULO QA ESTRUCTURAL — CONFIGURACIONES MAPSTORE2 / GEOJSON
+# ══════════════════════════════════════════════════════════
+
+class MapaJSONRequest(BaseModel):
+    contenido_json: str
+    nombre_archivo: str = "map.json"
+    tipo_evento: str = "general"
+    descripcion: str = ""
+
+
+def analizar_mapstore(cfg: dict) -> dict:
+    """
+    Validación determinística de una configuración MapStore2.
+    No usa IA: son reglas cartográficas verificables.
+    """
+    mapa    = cfg.get("map", {})
+    capas   = mapa.get("layers", []) or []
+    grupos  = mapa.get("groups", []) or []
+    centro  = mapa.get("center", {}) or {}
+
+    def titulo_grupo(g):
+        t = g.get("title")
+        if isinstance(t, dict):
+            return t.get("default") or t.get("es-AR") or "(sin título)"
+        return t or "(sin título)"
+
+    visibles     = [c for c in capas if c.get("visibility")]
+    ids_grupos   = {g.get("id") for g in grupos}
+    grupos_usados = {c.get("group") for c in capas if c.get("group")}
+
+    sin_desc      = [c.get("title","(sin título)") for c in capas if not c.get("description")]
+    sin_creditos  = [c.get("title","(sin título)") for c in capas if not c.get("credits")]
+    sin_titulo    = [c.get("id","(sin id)") for c in capas if not c.get("title")]
+    sin_grupo     = [c.get("title","(sin título)") for c in capas if not c.get("group")]
+    grupo_roto    = [c.get("title","(sin título)") for c in capas
+                     if c.get("group") and c["group"] not in ids_grupos and c["group"] != "background"]
+    url_insegura  = [c.get("title","(sin título)") for c in capas
+                     if str(c.get("url","")).startswith("http://")]
+    grupos_vacios = [titulo_grupo(g) for g in grupos if g.get("id") not in grupos_usados]
+
+    from collections import Counter
+    dup = {k: v for k, v in Counter(
+        c.get("title","(sin título)") for c in capas).items() if v > 1}
+
+    urls = sorted({c.get("url") for c in capas if c.get("url")})
+    externos = [u for u in urls
+                if not any(d in u.lower() for d in ("conae.gov.ar", "conae.gob.ar", "ign.gob.ar", "ign.gov.ar"))]
+
+    return {
+        "formato": "MapStore2",
+        "version_config": cfg.get("version"),
+        "proyeccion": mapa.get("projection"),
+        "crs_centro": centro.get("crs"),
+        "zoom": mapa.get("zoom"),
+        "unidades": mapa.get("units"),
+        "total_capas": len(capas),
+        "capas_visibles": len(visibles),
+        "total_grupos": len(grupos),
+        "servicios_wms": len(urls),
+        "titulos_visibles": [c.get("title") for c in visibles][:15],
+        "servicios_externos": externos,
+        "hallazgos": {
+            "sin_descripcion": sin_desc,
+            "sin_creditos": sin_creditos,
+            "sin_titulo": sin_titulo,
+            "sin_grupo": sin_grupo,
+            "grupo_inexistente": grupo_roto,
+            "url_insegura": url_insegura,
+            "grupos_vacios": grupos_vacios,
+            "titulos_duplicados": dup,
+        },
+    }
+
+
+def analizar_geojson(cfg: dict) -> dict:
+    """Validación determinística de un GeoJSON estándar."""
+    feats = cfg.get("features", []) or []
+    props_todas, geoms = set(), {}
+    sin_props, sin_geom = 0, 0
+
+    for f in feats:
+        p = f.get("properties") or {}
+        g = f.get("geometry") or {}
+        if not p:
+            sin_props += 1
+        else:
+            props_todas.update(p.keys())
+        if not g:
+            sin_geom += 1
+        else:
+            t = g.get("type", "?")
+            geoms[t] = geoms.get(t, 0) + 1
+
+    # atributos faltantes por feature
+    incompletos = 0
+    for f in feats:
+        p = f.get("properties") or {}
+        if props_todas and any(p.get(k) in (None, "") for k in props_todas):
+            incompletos += 1
+
+    crs = cfg.get("crs", {}).get("properties", {}).get("name") if isinstance(cfg.get("crs"), dict) else None
+
+    return {
+        "formato": "GeoJSON",
+        "tipo": cfg.get("type"),
+        "crs_declarado": crs,
+        "total_features": len(feats),
+        "tipos_geometria": geoms,
+        "atributos": sorted(props_todas),
+        "hallazgos": {
+            "features_sin_propiedades": sin_props,
+            "features_sin_geometria": sin_geom,
+            "features_con_atributos_vacios": incompletos,
+        },
+    }
+
+
+PROMPT_QA_JSON = """Realizá el control de calidad de esta configuración cartográfica digital destinada a la gestión de emergencias.
+
+ARCHIVO: {nombre}
+CONTEXTO DEL EVENTO: {contexto}
+DESCRIPCIÓN DECLARADA: {descripcion}
+
+ANÁLISIS ESTRUCTURAL AUTOMÁTICO (validación determinística ya ejecutada):
+{resumen}
+
+Interpretá estos hallazgos desde la óptica del control de calidad cartográfica institucional de CONAE y respondé ÚNICAMENTE con JSON puro sin backticks ni comas finales:
+{{
+  "titulo_detectado": "descripción del producto cartográfico digital analizado",
+  "tipo_producto": "clasificación técnica del archivo",
+  "score": {{
+    "global": 85,
+    "cartografico": 90,
+    "institucional": 70,
+    "redaccion": 95,
+    "coherencia": 85
+  }},
+  "checklist": [
+    {{"item": "Sistema de referencia declarado", "estado": "ok", "obs": "observación breve"}},
+    {{"item": "Proyección coherente", "estado": "ok", "obs": "observación breve"}},
+    {{"item": "Capas con título", "estado": "ok", "obs": "observación breve"}},
+    {{"item": "Capas con descripción", "estado": "revisar", "obs": "observación breve"}},
+    {{"item": "Créditos y atribución de fuente", "estado": "falta", "obs": "observación breve"}},
+    {{"item": "Organización en grupos temáticos", "estado": "ok", "obs": "observación breve"}},
+    {{"item": "Integridad referencial capa-grupo", "estado": "ok", "obs": "observación breve"}},
+    {{"item": "Seguridad de servicios (HTTPS)", "estado": "ok", "obs": "observación breve"}},
+    {{"item": "Dependencia de servicios externos", "estado": "revisar", "obs": "observación breve"}},
+    {{"item": "Capas visibles al abrir el mapa", "estado": "ok", "obs": "observación breve"}}
+  ],
+  "criticos": [
+    {{"titulo": "título del error crítico", "desc": "problema concreto e impacto operativo en una emergencia", "accion": "corrección específica"}}
+  ],
+  "advertencias": [
+    {{"titulo": "título de la advertencia", "desc": "problema menor detectado", "accion": "sugerencia de mejora"}}
+  ],
+  "correcciones_texto": [
+    {{"encontrado": "texto o nombre problemático", "sugerido": "versión corregida", "motivo": "nomenclatura / ortografía / terminología"}}
+  ],
+  "resumen": "3-4 oraciones con el veredicto del control de calidad estructural, qué debe corregirse antes de publicar y si la configuración es apta para uso operativo en emergencias.",
+  "apto_entrega": "CON_CORRECCIONES"
+}}
+
+CRITERIOS DE EVALUACIÓN:
+- "institucional" baja si hay muchas capas sin créditos ni atribución de fuente
+- "cartografico" baja si falta CRS, hay integridad referencial rota o proyección inconsistente
+- "coherencia" baja si hay grupos vacíos, títulos duplicados o capas huérfanas
+- Los servicios externos son un riesgo de disponibilidad en emergencias: mencionalo
+- Muchas capas visibles al inicio saturan la lectura del operador
+- "estado" solo puede ser: "ok", "falta" o "revisar"
+- "apto_entrega" solo puede ser: "SI", "NO" o "CON_CORRECCIONES"
+- Si no hay hallazgos de una categoría, devolvé array vacío []"""
+
+
+@app.post("/qa-json")
+async def qa_json(req: MapaJSONRequest):
+    """Control de calidad de configuraciones cartográficas digitales (MapStore2 / GeoJSON)."""
+    try:
+        cfg = json.loads(req.contenido_json)
+    except Exception as e:
+        raise HTTPException(400, f"El archivo no es un JSON válido: {str(e)}")
+
+    # Detección de formato y validación determinística
+    if isinstance(cfg, dict) and "map" in cfg and isinstance(cfg.get("map"), dict):
+        analisis = analizar_mapstore(cfg)
+    elif isinstance(cfg, dict) and cfg.get("type") in ("FeatureCollection", "Feature"):
+        analisis = analizar_geojson(cfg)
+    else:
+        raise HTTPException(400, "Formato no reconocido. Se admite configuración MapStore2 o GeoJSON estándar.")
+
+    contexto = CONTEXTO_EVENTO.get(req.tipo_evento, CONTEXTO_EVENTO["general"])
+    descripcion = req.descripcion.strip() or "El técnico no proporcionó descripción."
+
+    # Resumen compacto para la IA (evita mandar el archivo completo)
+    h = analisis["hallazgos"]
+    resumen = json.dumps({
+        **{k: v for k, v in analisis.items() if k != "hallazgos"},
+        "hallazgos_conteo": {k: (len(v) if isinstance(v, (list, dict)) else v) for k, v in h.items()},
+        "ejemplos_sin_creditos": (h.get("sin_creditos") or [])[:8],
+        "ejemplos_grupos_vacios": (h.get("grupos_vacios") or [])[:8],
+        "ejemplos_sin_descripcion": (h.get("sin_descripcion") or [])[:5],
+    }, ensure_ascii=False, indent=2)
+
+    prompt = PROMPT_QA_JSON.format(
+        nombre=req.nombre_archivo,
+        contexto=contexto,
+        descripcion=descripcion,
+        resumen=resumen
+    )
+
+    texto = await llamar_ia({
+        "model": AI_MODEL,
+        "max_tokens": 2500,
+        "system": SISTEMA_QA + "\n\nEn este modo analizás configuraciones cartográficas digitales (no imágenes). Respondés SIEMPRE en JSON puro válido, sin backticks, sin texto adicional y SIN comas finales.",
+        "messages": [{"role": "user", "content": prompt}]
+    })
+
+    try:
+        resultado = json.loads(limpiar_json(texto))
+        resultado["_analisis_estructural"] = analisis
+        return resultado
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Error JSON: {str(e)} | Texto: {texto[:300]}")
+
+
+class ChatJSONRequest(BaseModel):
+    resumen_estructural: str
+    historial: List[ChatMessage] = []
+    pregunta: str
+    tipo_evento: str = "general"
+
+
+@app.post("/qa-json-chat")
+async def qa_json_chat(req: ChatJSONRequest):
+    """Diálogo iterativo sobre una configuración cartográfica analizada."""
+    contexto = CONTEXTO_EVENTO.get(req.tipo_evento, CONTEXTO_EVENTO["general"])
+
+    mensajes = [
+        {"role": "user", "content": f"Esta es la configuración cartográfica bajo revisión. Contexto del evento: {contexto}.\n\nANÁLISIS ESTRUCTURAL:\n{req.resumen_estructural}\n\nVoy a hacerte consultas sobre esta configuración."},
+        {"role": "assistant", "content": "Recibí el análisis estructural de la configuración. Estoy listo para responder tus consultas sobre el control de calidad."}
+    ]
+
+    for m in req.historial:
+        if m.role in ("user", "assistant") and m.content.strip():
+            mensajes.append({"role": m.role, "content": m.content})
+
+    mensajes.append({"role": "user", "content": req.pregunta})
+
+    texto = await llamar_ia({
+        "model": AI_MODEL,
+        "max_tokens": 1200,
+        "system": SISTEMA_QA + "\n\nEn este modo conversacional respondés en texto plano, claro y conciso. Sin JSON. Máximo 4-5 oraciones salvo que te pidan detalle.",
+        "messages": mensajes
+    })
+
+    return {"respuesta": texto.strip()}
+
+
 # ══════════════════ ENDPOINTS DE ESTADO ══════════════════
 
 @app.get("/")
@@ -393,8 +653,8 @@ def root():
     return {
         "status": "ok",
         "app": "Vertech TdF API",
-        "version": "4.0.0",
-        "modulos": ["analisis-satelital", "qa-mapas-emergencia"],
+        "version": "4.1.0",
+        "modulos": ["analisis-satelital", "qa-mapas-imagen", "qa-mapas-json"],
         "ai_mode": AI_MODE
     }
 
