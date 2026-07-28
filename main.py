@@ -7,7 +7,7 @@ import os
 import json
 import re
 
-app = FastAPI(title="Vertech TdF API", version="4.1.0")
+app = FastAPI(title="Vertech TdF API", version="4.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -235,20 +235,97 @@ REGLAS PARA LOS CAMPOS:
 - "apto_entrega" solo puede ser: "SI", "NO" o "CON_CORRECCIONES"
 - Si no encontrás errores críticos, dejá "criticos" como array vacío []
 - Si no encontrás errores de texto, dejá "correcciones_texto" como array vacío []
+
+LÍMITES DE EXTENSIÓN (obligatorio para evitar respuestas cortadas):
+- "checklist": exactamente 10 items, "obs" de máximo 12 palabras cada uno
+- "criticos": máximo 4 items, "desc" de máximo 25 palabras
+- "advertencias": máximo 4 items, "desc" de máximo 25 palabras
+- "correcciones_texto": máximo 5 items
+- "resumen": máximo 60 palabras
+Priorizá siempre los hallazgos de mayor impacto operativo.
 - Sé honesto: si la imagen no es un mapa temático, indicalo en "resumen" y poné score bajo"""
 
 
 # ══════════════════ UTILIDADES ══════════════════
 
+def _reparar_truncado(txt: str) -> str:
+    """
+    Repara un JSON cortado por límite de tokens.
+    Descarta el último elemento incompleto y cierra las estructuras abiertas.
+    """
+    # Cortar en el último separador estructural completo
+    for corte in ('},', '],', '",'):
+        i = txt.rfind(corte)
+        if i > 0:
+            txt = txt[:i + 1]
+            break
+    else:
+        i = max(txt.rfind('}'), txt.rfind(']'), txt.rfind('"'))
+        if i > 0:
+            txt = txt[:i + 1]
+
+    txt = txt.rstrip().rstrip(',')
+
+    # Contar delimitadores abiertos ignorando los que están dentro de strings
+    pila, en_str, escape = [], False, False
+    for ch in txt:
+        if escape:
+            escape = False
+            continue
+        if ch == '\\':
+            escape = True
+            continue
+        if ch == '"':
+            en_str = not en_str
+            continue
+        if en_str:
+            continue
+        if ch in '{[':
+            pila.append(ch)
+        elif ch in '}]' and pila:
+            pila.pop()
+
+    if en_str:
+        txt += '"'
+    for ch in reversed(pila):
+        txt += '}' if ch == '{' else ']'
+    return txt
+
+
 def limpiar_json(texto: str) -> str:
-    """Limpia el texto para obtener JSON válido."""
+    """Extrae y normaliza el bloque JSON de la respuesta del modelo."""
     texto = texto.replace("```json", "").replace("```", "").strip()
     inicio = texto.find("{")
+    if inicio >= 0:
+        texto = texto[inicio:]
     fin = texto.rfind("}") + 1
-    if inicio >= 0 and fin > inicio:
-        texto = texto[inicio:fin]
+    if fin > 0:
+        texto = texto[:fin]
     texto = re.sub(r',\s*([}\]])', r'\1', texto)
     return texto
+
+
+def parsear_respuesta(texto: str) -> dict:
+    """
+    Parsea la respuesta del modelo con tolerancia a truncamiento.
+    Primero intenta el parseo normal; si falla, repara y reintenta.
+    """
+    limpio = limpiar_json(texto)
+    try:
+        return json.loads(limpio)
+    except json.JSONDecodeError:
+        pass
+
+    # Reintento sobre el texto crudo desde la primera llave
+    crudo = texto.replace("```json", "").replace("```", "").strip()
+    i = crudo.find("{")
+    if i >= 0:
+        crudo = crudo[i:]
+    reparado = _reparar_truncado(crudo)
+    reparado = re.sub(r',\s*([}\]])', r'\1', reparado)
+    datos = json.loads(reparado)
+    datos["_respuesta_truncada"] = True
+    return datos
 
 
 def get_headers():
@@ -288,7 +365,7 @@ async def analizar_imagen(req: ImageRequest):
 
     texto = await llamar_ia({
         "model": AI_MODEL,
-        "max_tokens": 1800,
+        "max_tokens": 3000,
         "system": "Sos el sistema de análisis satelital Vertech TdF, desarrollado en Tierra del Fuego, Argentina. Analizás imágenes de la constelación CONAE (SAOCOM 1A/1B, SABIA-Mar, SIASGE) y datos complementarios de ESA/Copernicus. Tu especialidad es la ZEE argentina, el Mar Argentino, la Patagonia y ecosistemas subantárticos. Respondés SIEMPRE en JSON puro válido, sin backticks, sin texto adicional y SIN comas finales.",
         "messages": [{
             "role": "user",
@@ -300,7 +377,7 @@ async def analizar_imagen(req: ImageRequest):
     })
 
     try:
-        return json.loads(limpiar_json(texto))
+        return parsear_respuesta(texto)
     except Exception as e:
         raise HTTPException(502, f"Error JSON: {str(e)} | Texto: {texto[:300]}")
 
@@ -325,7 +402,7 @@ async def qa_mapa(req: MapaQARequest):
 
     texto = await llamar_ia({
         "model": AI_MODEL,
-        "max_tokens": 2500,
+        "max_tokens": 4000,
         "system": SISTEMA_QA + "\n\nRespondés SIEMPRE en JSON puro válido, sin backticks, sin texto adicional y SIN comas finales en arrays u objetos.",
         "messages": [{
             "role": "user",
@@ -337,7 +414,7 @@ async def qa_mapa(req: MapaQARequest):
     })
 
     try:
-        return json.loads(limpiar_json(texto))
+        return parsear_respuesta(texto)
     except Exception as e:
         raise HTTPException(502, f"Error JSON: {str(e)} | Texto: {texto[:300]}")
 
@@ -557,7 +634,15 @@ CRITERIOS DE EVALUACIÓN:
 - Muchas capas visibles al inicio saturan la lectura del operador
 - "estado" solo puede ser: "ok", "falta" o "revisar"
 - "apto_entrega" solo puede ser: "SI", "NO" o "CON_CORRECCIONES"
-- Si no hay hallazgos de una categoría, devolvé array vacío []"""
+- Si no hay hallazgos de una categoría, devolvé array vacío []
+
+LÍMITES DE EXTENSIÓN (obligatorio para evitar respuestas cortadas):
+- "checklist": exactamente 10 items, "obs" de máximo 12 palabras cada uno
+- "criticos": máximo 4 items, "desc" de máximo 25 palabras
+- "advertencias": máximo 4 items, "desc" de máximo 25 palabras
+- "correcciones_texto": máximo 5 items
+- "resumen": máximo 60 palabras
+Priorizá siempre los hallazgos de mayor impacto operativo."""
 
 
 @app.post("/qa-json")
@@ -598,13 +683,13 @@ async def qa_json(req: MapaJSONRequest):
 
     texto = await llamar_ia({
         "model": AI_MODEL,
-        "max_tokens": 2500,
+        "max_tokens": 4000,
         "system": SISTEMA_QA + "\n\nEn este modo analizás configuraciones cartográficas digitales (no imágenes). Respondés SIEMPRE en JSON puro válido, sin backticks, sin texto adicional y SIN comas finales.",
         "messages": [{"role": "user", "content": prompt}]
     })
 
     try:
-        resultado = json.loads(limpiar_json(texto))
+        resultado = parsear_respuesta(texto)
         resultado["_analisis_estructural"] = analisis
         return resultado
     except HTTPException:
@@ -653,7 +738,7 @@ def root():
     return {
         "status": "ok",
         "app": "Vertech TdF API",
-        "version": "4.1.0",
+        "version": "4.2.0",
         "modulos": ["analisis-satelital", "qa-mapas-imagen", "qa-mapas-json"],
         "ai_mode": AI_MODE
     }
